@@ -3,8 +3,6 @@
 #include <Common/HashTable/HashMap.h>
 #include <Common/HashTable/HashTable.h>
 
-/// TODO feature macros
-
 #define CASE_1_8 \
     case 1: \
     case 2: \
@@ -80,6 +78,7 @@ inline const StringRef & ALWAYS_INLINE toStringRef(const StringRef & s)
 
 struct StringHashTableHash
 {
+#if defined(__SSE4_2__)
     size_t ALWAYS_INLINE operator()(StringKey8 key) const
     {
         size_t res = -1ULL;
@@ -101,29 +100,23 @@ struct StringHashTableHash
         res = _mm_crc32_u64(res, key.c);
         return res;
     }
+#else
+    size_t ALWAYS_INLINE operator()(StringKey8 key) const
+    {
+        return CityHash_v1_0_2::CityHash64(reinterpret_cast<const char *>(&key), 8);
+    }
+    size_t ALWAYS_INLINE operator()(StringKey16 key) const
+    {
+        return CityHash_v1_0_2::CityHash64(reinterpret_cast<const char *>(&key), 16);
+    }
+    size_t ALWAYS_INLINE operator()(StringKey24 key) const
+    {
+        return CityHash_v1_0_2::CityHash64(reinterpret_cast<const char *>(&key), 24);
+    }
+#endif
     size_t ALWAYS_INLINE operator()(StringRef key) const
     {
-        size_t res = -1ULL;
-        size_t sz = key.size;
-        const char * p = key.data;
-        const char * lp = p + sz - 8; // starting pointer of the last 8 bytes segment
-        char s = (-sz & 7) * 8; // pending bits that needs to be shifted out
-        UInt64 n[3]; // StringRef in SSO map will have length > 24
-        memcpy(&n, p, 24);
-        res = _mm_crc32_u64(res, n[0]);
-        res = _mm_crc32_u64(res, n[1]);
-        res = _mm_crc32_u64(res, n[2]);
-        p += 24;
-        while (p + 8 < lp)
-        {
-            memcpy(&n[0], p, 8);
-            res = _mm_crc32_u64(res, n[0]);
-            p += 8;
-        }
-        memcpy(&n[0], lp, 8);
-        n[0] >>= s;
-        res = _mm_crc32_u64(res, n[0]);
-        return res;
+        return StringRefHash()(key);
     }
 };
 
@@ -226,7 +219,7 @@ public:
     // 3. Combine hash computation along with key loading
     // 4. Funcs are named callables that can be force_inlined
     // NOTE: It relies on Little Endianness and SSE4.2
-    template <typename Func, typename KeyHolder>
+    template <typename KeyHolder, typename Func>
     decltype(auto) ALWAYS_INLINE dispatch(KeyHolder && key_holder, Func && func)
     {
         static constexpr StringKey0 key0{};
@@ -235,7 +228,6 @@ public:
         const char * p = x.data;
         // pending bits that needs to be shifted out
         char s = (-sz & 7) * 8;
-        size_t res = -1ULL;
         union
         {
             StringKey8 k8;
@@ -243,6 +235,7 @@ public:
             StringKey24 k24;
             UInt64 n[3];
         };
+        StringHashTableHash hash;
         switch (sz)
         {
             case 0:
@@ -261,48 +254,27 @@ public:
                     memcpy(&n[0], lp, 8);
                     n[0] >>= s;
                 }
-                res = _mm_crc32_u64(res, n[0]);
                 keyHolderDiscardKey(key_holder);
-                return func(m1, k8, res);
+                return func(m1, k8, hash(k8));
             }
             CASE_9_16 : {
                 memcpy(&n[0], p, 8);
-                res = _mm_crc32_u64(res, n[0]);
                 const char * lp = x.data + x.size - 8;
                 memcpy(&n[1], lp, 8);
                 n[1] >>= s;
-                res = _mm_crc32_u64(res, n[1]);
                 keyHolderDiscardKey(key_holder);
-                return func(m2, k16, res);
+                return func(m2, k16, hash(k16));
             }
             CASE_17_24 : {
                 memcpy(&n[0], p, 16);
-                res = _mm_crc32_u64(res, n[0]);
-                res = _mm_crc32_u64(res, n[1]);
                 const char * lp = x.data + x.size - 8;
                 memcpy(&n[2], lp, 8);
                 n[2] >>= s;
-                res = _mm_crc32_u64(res, n[2]);
                 keyHolderDiscardKey(key_holder);
-                return func(m3, k24, res);
+                return func(m3, k24, hash(k24));
             }
             default: {
-                memcpy(&n, x.data, 24);
-                res = _mm_crc32_u64(res, n[0]);
-                res = _mm_crc32_u64(res, n[1]);
-                res = _mm_crc32_u64(res, n[2]);
-                p += 24;
-                const char * lp = x.data + x.size - 8;
-                while (p + 8 < lp)
-                {
-                    memcpy(&n[0], p, 8);
-                    res = _mm_crc32_u64(res, n[0]);
-                    p += 8;
-                }
-                memcpy(&n[0], lp, 8);
-                n[0] >>= s;
-                res = _mm_crc32_u64(res, n[0]);
-                return func(ms, key_holder, res);
+                return func(ms, std::forward<KeyHolder>(key_holder), hash(x));
             }
         }
     }
@@ -400,9 +372,7 @@ public:
 
     void clearAndShrink()
     {
-        using Cell = decltype(m0.value);
-        if (!std::is_trivially_destructible_v<Cell>)
-            m0.value.~Cell();
+        m1.clearHasZero();
         m1.clearAndShrink();
         m2.clearAndShrink();
         m3.clearAndShrink();
