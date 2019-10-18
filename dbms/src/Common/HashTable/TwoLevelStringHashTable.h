@@ -40,11 +40,9 @@ public:
     template <typename Source>
     TwoLevelStringHashTable(const Source & src)
     {
-        if (src.m0.size())
-        {
-            impls[0].m0.value = src.m0.value;
-            impls[0].m0.is_empty = false;
-        }
+        if (src.m0.hasZero())
+            impls[0].m0.setHasZero(*src.m0.zeroValue());
+
         for (auto & v : src.m1)
         {
             size_t hash_value = v.getHash(src.m1);
@@ -95,6 +93,7 @@ public:
             StringKey24 k24;
             UInt64 n[3];
         };
+        StringHashTableHash hash;
         switch (sz)
         {
             case 0:
@@ -113,52 +112,35 @@ public:
                     memcpy(&n[0], lp, 8);
                     n[0] >>= s;
                 }
-                res = _mm_crc32_u64(res, n[0]);
+                res = hash(k8);
                 buck = getBucketFromHash(res);
                 keyHolderDiscardKey(key_holder);
                 return func(impls[buck].m1, k8, res);
             }
             CASE_9_16 : {
                 memcpy(&n[0], p, 8);
-                res = _mm_crc32_u64(res, n[0]);
                 const char * lp = x.data + x.size - 8;
                 memcpy(&n[1], lp, 8);
                 n[1] >>= s;
-                res = _mm_crc32_u64(res, n[1]);
+                res = hash(k16);
                 buck = getBucketFromHash(res);
                 keyHolderDiscardKey(key_holder);
                 return func(impls[buck].m2, k16, res);
             }
             CASE_17_24 : {
                 memcpy(&n[0], p, 16);
-                res = _mm_crc32_u64(res, n[0]);
-                res = _mm_crc32_u64(res, n[1]);
                 const char * lp = x.data + x.size - 8;
                 memcpy(&n[2], lp, 8);
                 n[2] >>= s;
-                res = _mm_crc32_u64(res, n[2]);
+                res = hash(k24);
                 buck = getBucketFromHash(res);
                 keyHolderDiscardKey(key_holder);
                 return func(impls[buck].m3, k24, res);
             }
             default: {
-                memcpy(&n, x.data, 24);
-                res = _mm_crc32_u64(res, n[0]);
-                res = _mm_crc32_u64(res, n[1]);
-                res = _mm_crc32_u64(res, n[2]);
-                p += 24;
-                const char * lp = x.data + x.size - 8;
-                while (p + 8 < lp)
-                {
-                    memcpy(&n[0], p, 8);
-                    res = _mm_crc32_u64(res, n[0]);
-                    p += 8;
-                }
-                memcpy(&n[0], lp, 8);
-                n[0] >>= s;
-                res = _mm_crc32_u64(res, n[0]);
+                res = hash(x);
                 buck = getBucketFromHash(res);
-                return func(impls[buck].ms, key_holder, res);
+                return func(impls[buck].ms, std::forward<KeyHolder>(key_holder), res);
             }
         }
     }

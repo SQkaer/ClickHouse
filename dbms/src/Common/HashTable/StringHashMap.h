@@ -80,10 +80,18 @@ public:
     template <typename Func>
     void ALWAYS_INLINE mergeToViaEmplace(Self & that, Func && func)
     {
-        if (this->m0.size() && that.m0.size())
-            func(that.m0.value.getSecond(), this->m0.value.getSecond(), false);
-        else if (this->m0.size())
-            func(that.m0.value.getSecond(), this->m0.value.getSecond(), true);
+        if (this->m0.hasZero())
+        {
+            const bool emplace_new_zero = !that.m0.hasZero();
+            if (emplace_new_zero)
+            {
+                that.m0.setHasZero();
+            }
+
+            func(that.m0.zeroValue()->getSecond(), this->m0.zeroValue()->getSecond(),
+                 emplace_new_zero);
+        }
+
         this->m1.mergeToViaEmplace(that.m1, func);
         this->m2.mergeToViaEmplace(that.m2, func);
         this->m3.mergeToViaEmplace(that.m3, func);
@@ -98,10 +106,18 @@ public:
     template <typename Func>
     void ALWAYS_INLINE mergeToViaFind(Self & that, Func && func)
     {
-        if (this->m0.size() && that.m0.size())
-            func(that.m0.value.getSecond(), this->m0.value.getSecond(), true);
-        else if (this->m0.size())
-            func(this->m0.value.getSecond(), this->m0.value.getSecond(), false);
+        if (this->m0.hasZero())
+        {
+            if (that.m0.hasZero())
+            {
+                func(that.m0.zeroValue()->getSecond(), this->m0.zeroValue()->getSecond(), true);
+            }
+            else
+            {
+                func(this->m0.zeroValue()->getSecond(), this->m0.zeroValue()->getSecond(), false);
+            }
+        }
+
         this->m1.mergeToViaFind(that.m1, func);
         this->m2.mergeToViaFind(that.m2, func);
         this->m3.mergeToViaFind(that.m3, func);
@@ -123,8 +139,7 @@ public:
     {
         if (this->m0.size())
         {
-            auto v = this->m0.value;
-            func(toStringRef(v.getFirst()), v.getSecond());
+            func(StringRef{}, this->m0.zeroValue()->getSecond());
         }
 
         for (auto & v : this->m1)
@@ -152,7 +167,7 @@ public:
     void ALWAYS_INLINE forEachMapped(Func && func)
     {
         if (this->m0.size())
-            func(this->m0.value.getSecond());
+            func(this->m0.zeroValue()->getSecond());
         for (auto & v : this->m1)
             func(v.getSecond());
         for (auto & v : this->m2)

@@ -124,38 +124,64 @@ template <typename Cell>
 struct StringHashTableEmpty
 {
     using Self = StringHashTableEmpty;
-    using LookupResult = typename Cell::mapped_type *;
 
-    Cell value;
-    bool is_empty{true};
+    bool has_zero = false;
+    std::aligned_storage_t<sizeof(Cell), alignof(Cell)> zero_value_storage; /// Storage of element with zero key.
 
-    StringHashTableEmpty() { memset(reinterpret_cast<char *>(&value), 0, sizeof(value)); }
+public:
+    bool hasZero() const { return has_zero; }
 
-    void ALWAYS_INLINE emplace(const StringKey0 &, LookupResult & it, bool & inserted, size_t)
+    void setHasZero()
     {
+        has_zero = true;
+        new (zeroValue()) Cell();
+    }
 
-        if (is_empty)
+    void setHasZero(const Cell & other)
+    {
+        has_zero = true;
+        new (zeroValue()) Cell(other);
+    }
+
+    void clearHasZero()
+    {
+        has_zero = false;
+        if (!std::is_trivially_destructible_v<Cell>)
+            zeroValue()->~Cell();
+    }
+
+    Cell * zeroValue() { return reinterpret_cast<Cell *>(&zero_value_storage); }
+    const Cell * zeroValue() const { return reinterpret_cast<const Cell *>(&zero_value_storage); }
+
+    using LookupResult = Cell *;
+    using ConstLookupResult = const Cell *;
+
+    template <typename KeyHolder>
+    void ALWAYS_INLINE emplace(KeyHolder &&, LookupResult & it, bool & inserted, size_t /* hash */)
+    {
+        if (!hasZero())
         {
+            setHasZero();
             inserted = true;
-            is_empty = false;
         }
         else
             inserted = false;
-
-        it = &value.getSecond();
+        it = zeroValue();
     }
 
-    LookupResult ALWAYS_INLINE find(const StringKey0 &, size_t)
+    template <typename Key>
+    LookupResult ALWAYS_INLINE find(Key, size_t /* hash */)
     {
-        return &value.getSecond();
+        return hasZero() ? zeroValue() : nullptr;
     }
 
-    void write(DB::WriteBuffer & wb) const { value.write(wb); }
-    void writeText(DB::WriteBuffer & wb) const { value.writeText(wb); }
-    void read(DB::ReadBuffer & rb) { value.read(rb); }
-    void readText(DB::ReadBuffer & rb) { value.readText(rb); }
-    size_t size() const { return is_empty ? 0 : 1; }
-    bool empty() const { return is_empty; }
+
+    void write(DB::WriteBuffer & wb) const { zeroValue()->write(wb); }
+    void writeText(DB::WriteBuffer & wb) const { zeroValue()->writeText(wb); }
+    void read(DB::ReadBuffer & rb) { zeroValue()->read(rb); }
+    void readText(DB::ReadBuffer & rb) { zeroValue()->readText(rb); }
+    size_t size() const { return hasZero() ? 1 : 0; }
+    bool empty() const { return !hasZero(); }
     size_t getBufferSizeInBytes() const { return sizeof(Cell); }
     size_t getCollisions() const { return 0; }
 };
